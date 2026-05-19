@@ -10,6 +10,8 @@ import {
   AgentStatus,
   CadenceStep,
   EmailDraft,
+  ICPRating,
+  ICPScore,
   IntelBrief,
   Lead,
   LeadStage,
@@ -19,11 +21,13 @@ import {
   buildCadenceLogs,
   buildCallPrepLogs,
   buildEmailLogs,
+  buildICPLogs,
   buildIntelLogs,
   buildTouchLogs,
   checkTouch,
   generateEmail,
   generateIntel,
+  scoreICP,
 } from "@/lib/inbound/mockAgents";
 import { sleep } from "@/lib/utils";
 
@@ -39,6 +43,7 @@ const STAGE_FILTERS: ("All" | LeadStage)[] = [
 const initialAgent: AgentRunState = { status: "waiting", logs: [], doneLogs: [], progress: 0 };
 
 const initialPipeline: Record<AgentKey, AgentRunState> = {
+  icp: initialAgent,
   touch: initialAgent,
   intel: initialAgent,
   email: initialAgent,
@@ -112,6 +117,7 @@ export default function InboundPage() {
   const [meetingsBookedExtra, setMeetingsBookedExtra] = useState(0);
   const [running, setRunning] = useState(false);
   const [pipeline, setPipeline] = useState<Record<AgentKey, AgentRunState>>(initialPipeline);
+  const [icp, setIcp] = useState<ICPScore | null>(null);
   const [intel, setIntel] = useState<IntelBrief | null>(null);
   const [email, setEmail] = useState<EmailDraft | null>(null);
   const [emailBody, setEmailBody] = useState("");
@@ -140,6 +146,7 @@ export default function InboundPage() {
 
   const resetForLead = useCallback(() => {
     setPipeline(initialPipeline);
+    setIcp(null);
     setIntel(null);
     setEmail(null);
     setEmailBody("");
@@ -186,10 +193,15 @@ export default function InboundPage() {
     setRunning(true);
     resetForLead();
 
+    const icpLogs = buildICPLogs(selected);
     const touchLogs = buildTouchLogs(selected, touch);
     const intelLogs = buildIntelLogs(selected);
     const emailLogs = buildEmailLogs(touch);
     const cadenceLogs = buildCadenceLogs();
+
+    // ICP runs first — it's the qualification gate
+    await runLogs("icp", icpLogs, (i) => 220 + i * 160);
+    setIcp(scoreICP(selected));
 
     await Promise.all([
       runLogs("touch", touchLogs, (i) => 350 + i * 120),
@@ -254,7 +266,7 @@ export default function InboundPage() {
     []
   );
   const meetingsBooked = baselineMeetingsBooked + meetingsBookedExtra;
-  const hasRun = pipeline.touch.status !== "waiting";
+  const hasRun = pipeline.icp.status !== "waiting";
 
   return (
     <>
@@ -355,7 +367,7 @@ export default function InboundPage() {
                   <div style={{ fontSize: 28, marginBottom: 10 }}>←</div>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>Select a contact from the CRM</div>
                   <div style={{ fontSize: 11, marginTop: 5 }}>
-                    Five agents will fire — Touch History, Company Intel, Email Draft, Cadence, then Call Prep
+                    Six agents will fire — ICP Scoring, then Touch History, Company Intel, Email Draft, Cadence in parallel, then Call Prep
                   </div>
                 </div>
               ) : (
@@ -371,9 +383,24 @@ export default function InboundPage() {
                   {hasRun && (
                     <div className="agents-grid">
                       <AgentBlock
+                        id="icp"
+                        title="ICP Scoring"
+                        sub="Company + person qualification"
+                        icon="🎯"
+                        iconBg="rgba(255,107,53,0.12)"
+                        iconColor="var(--accent)"
+                        state={pipeline.icp}
+                        fullWidth
+                      >
+                        {pipeline.icp.status === "done" && icp && (
+                          <ICPCard icp={icp} />
+                        )}
+                      </AgentBlock>
+
+                      <AgentBlock
                         id="touch"
                         title="Touch History"
-                        sub="Granola + Gmail scan"
+                        sub="Meeting notes + mailbox scan"
                         icon="🔎"
                         iconBg="rgba(124,106,245,0.15)"
                         iconColor="var(--accent3)"
@@ -415,7 +442,7 @@ export default function InboundPage() {
                       >
                         {pipeline.intel.status === "running" && (
                           <div className="output-box">
-                            <div className="ai-badge">✦ Generating</div>
+                            <div className="ai-badge">★ Generating</div>
                             <div className="ai-loading">
                               <div className="ai-dot"></div>
                               <div className="ai-dot"></div>
@@ -462,7 +489,7 @@ export default function InboundPage() {
                       >
                         {pipeline.email.status === "running" && (
                           <div className="output-box">
-                            <div className="ai-badge">✦ Drafting</div>
+                            <div className="ai-badge">★ Drafting</div>
                             <div className="ai-loading">
                               <div className="ai-dot"></div>
                               <div className="ai-dot"></div>
@@ -498,7 +525,7 @@ export default function InboundPage() {
                                 disabled={emailSent}
                                 onClick={sendViaGmail}
                               >
-                                {emailSent ? "✓ Sent" : "Send via Gmail"}
+                                {emailSent ? "✓ Sent" : "Send Email"}
                               </button>
                               <button
                                 className="act-btn teal"
@@ -789,6 +816,63 @@ function QaItem({
       <div className="qa-q">{q}</div>
       <div className="qa-a" style={aStyle}>
         {a}
+      </div>
+    </div>
+  );
+}
+
+function ratingColor(r: ICPRating) {
+  if (r === "High") return "var(--green)";
+  if (r === "Medium") return "var(--accent2)";
+  return "var(--red)";
+}
+
+function scoreColor(n: number) {
+  if (n >= 80) return "var(--green)";
+  if (n >= 55) return "var(--accent2)";
+  return "var(--red)";
+}
+
+function ICPCard({ icp }: { icp: ICPScore }) {
+  return (
+    <div className="output-box icp-card">
+      <div className="icp-row">
+        <div className="icp-fit">
+          <div className="qa-q">Company Fit</div>
+          <span
+            className="icp-pill"
+            style={{
+              color: ratingColor(icp.companyFit),
+              background: `${ratingColor(icp.companyFit)}1f`,
+              border: `1px solid ${ratingColor(icp.companyFit)}55`,
+            }}
+          >
+            {icp.companyFit}
+          </span>
+        </div>
+        <div className="icp-fit">
+          <div className="qa-q">Person Fit</div>
+          <span
+            className="icp-pill"
+            style={{
+              color: ratingColor(icp.personFit),
+              background: `${ratingColor(icp.personFit)}1f`,
+              border: `1px solid ${ratingColor(icp.personFit)}55`,
+            }}
+          >
+            {icp.personFit}
+          </span>
+        </div>
+        <div className="icp-score">
+          <div className="qa-q">ICP Score</div>
+          <div className="icp-score-num" style={{ color: scoreColor(icp.overall) }}>
+            {icp.overall}
+          </div>
+        </div>
+      </div>
+      <div className="icp-rec">
+        <strong style={{ color: "var(--text)" }}>Recommendation:</strong>{" "}
+        <span style={{ color: scoreColor(icp.overall) }}>{icp.recommendation}</span>
       </div>
     </div>
   );

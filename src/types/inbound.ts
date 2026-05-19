@@ -35,7 +35,16 @@ export interface TouchResult {
   notes?: string;
 }
 
-export type AgentKey = "touch" | "intel" | "email" | "cadence" | "call";
+export type AgentKey = "icp" | "touch" | "intel" | "email" | "cadence" | "call";
+
+export type ICPRating = "High" | "Medium" | "Low";
+
+export interface ICPScore {
+  companyFit: ICPRating;
+  personFit: ICPRating;
+  overall: number;
+  recommendation: string;
+}
 export type AgentStatus = "waiting" | "running" | "done";
 
 export interface AgentRunState {
