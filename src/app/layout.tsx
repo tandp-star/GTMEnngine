@@ -2,8 +2,11 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "GTM Engine · AI Outreach Pipeline",
-  description: "AI-powered outreach pipeline for GTM teams",
+  title: {
+    template: "%s",
+    default: "GTM Engine",
+  },
+  description: "AI-powered GTM orchestration",
 };
 
 export default function RootLayout({
